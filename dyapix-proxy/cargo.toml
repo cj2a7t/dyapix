@@ -1,0 +1,8 @@
+[package]
+name = "dyapix-proxy"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "dyapix_proxy"
+path = "src/lib.rs"

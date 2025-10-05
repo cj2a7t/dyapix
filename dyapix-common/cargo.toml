@@ -1,0 +1,12 @@
+[package]
+name = "dyapix-common"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lib]
+name = "dyapix_common"
+path = "src/lib.rs"
