@@ -1,0 +1,12 @@
+# Development environment configuration
+# This configuration will override the corresponding settings in default.toml
+
+[log]
+log_level = "debug"
+
+[data_source.mysql]
+url = "mysql://root:Wandou@0719@localhost:3306/dynmcp"
+# Development environment may use fewer connections
+max_connections = 20
+min_connections = 2
+

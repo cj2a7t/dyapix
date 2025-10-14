@@ -1,0 +1,20 @@
+# Production environment configuration
+# This configuration will override the corresponding settings in default.toml
+
+[log]
+log_level = "info"
+log_dir = "/var/log/dyapix"
+
+# Production database configuration should be provided via environment variables
+# Example: APP__DATA_SOURCE__MYSQL__URL
+# Example: APP__DATA_SOURCE__MYSQL__MAX_CONNECTIONS=100
+
+[data_source.mysql]
+# Production environment typically uses more connections
+max_connections = 100
+min_connections = 10
+acquire_timeout_secs = 30
+idle_timeout_secs = 300      # 5 minutes
+max_lifetime_secs = 1800     # 30 minutes
+test_before_acquire = true
+

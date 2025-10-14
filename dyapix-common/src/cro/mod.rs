@@ -1,7 +1,8 @@
+use router_radix::{RadixHttpMethod, RadixNode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Route {
     pub id: String,
     pub name: String,
@@ -9,18 +10,37 @@ pub struct Route {
     pub priority: u32,
     pub label: Option<HashMap<String, String>>,
     pub uris: Vec<String>,
-    pub methods: Vec<String>,
-    pub hosts: Vec<String>,
+    pub methods: Option<Vec<String>>,
+    pub hosts: Option<Vec<String>>,
     pub plugins: Option<HashMap<String, serde_json::Value>>,
-    #[serde(flatten)]
-    pub upstream_config: UpstreamConfig,
+    pub upstream_id: Option<String>,
+    pub upstream: Option<Upstream>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum UpstreamConfig {
-    Reference { upstream_id: String },
-    Inline { upstream: Upstream },
+impl From<&Route> for RadixNode {
+    fn from(route: &Route) -> Self {
+        let methods = route.methods.as_ref().map(|m| {
+            let mut result = RadixHttpMethod::empty();
+            for method in m {
+                if let Some(http_method) = RadixHttpMethod::from_str(method) {
+                    result |= http_method;
+                }
+            }
+            result
+        });
+
+        RadixNode {
+            id: route.id.clone(),
+            paths: route.uris.clone(),
+            methods,
+            hosts: route.hosts.clone(),
+            remote_addrs: None,
+            vars: None,
+            filter_fn: None,
+            priority: route.priority as i32,
+            metadata: serde_json::to_value(route).unwrap_or(serde_json::Value::Null),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

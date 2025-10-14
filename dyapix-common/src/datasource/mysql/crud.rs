@@ -1,0 +1,171 @@
+use anyhow::{anyhow, Result};
+use chrono::Utc;
+use std::any::type_name;
+use std::sync::Arc;
+use tracing::warn;
+
+use super::pool::get_mysql_pool;
+use super::types::DyapixDs;
+use crate::datasource::mysql::MysqlDataSource;
+
+impl MysqlDataSource {
+    /// Insert or update a record
+    pub async fn put<T>(self: &Arc<Self>, id: &str, value: &T) -> Result<T>
+    where
+        T: serde::Serialize + Clone + Send + Sync + 'static,
+    {
+        let pool = get_mysql_pool().await?;
+        let value_json = serde_json::to_string(value)?;
+
+        let ds_type = std::any::type_name::<T>()
+            .rsplit("::")
+            .next()
+            .unwrap_or("Unknown");
+        let now = Utc::now();
+
+        // Check if record already exists (including deleted ones)
+        let existing: Option<(String, bool)> =
+            sqlx::query_as("SELECT ds_json, is_deleted FROM dyapix_ds WHERE `key` = ?")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+
+        let (operation_type, prev_ds_json) = match existing {
+            Some((prev_json, is_deleted)) => {
+                if is_deleted {
+                    // Restore deleted record as a new create
+                    ("create", None)
+                } else {
+                    // Update existing record
+                    ("update", Some(prev_json))
+                }
+            }
+            None => ("create", None),
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO dyapix_ds (`key`, ds_type, ds_json, prev_ds_json, ds_status, operation_type, is_deleted, create_time, update_time)
+            VALUES (?, ?, ?, ?, 'pending', ?, FALSE, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                ds_type = VALUES(ds_type),
+                ds_json = VALUES(ds_json),
+                prev_ds_json = VALUES(prev_ds_json),
+                ds_status = VALUES(ds_status),
+                operation_type = VALUES(operation_type),
+                is_deleted = VALUES(is_deleted),
+                update_time = VALUES(update_time)
+        "#,
+        )
+        .bind(id)
+        .bind(ds_type)
+        .bind(&value_json)
+        .bind(prev_ds_json)
+        .bind(operation_type)
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await?;
+
+        Ok(value.clone())
+    }
+
+    /// Get a single record by key
+    pub async fn get<T>(self: &Arc<Self>, id: &str) -> Result<T>
+    where
+        T: for<'de> serde::Deserialize<'de>,
+    {
+        let pool = get_mysql_pool().await?;
+
+        let record: Option<DyapixDs> =
+            sqlx::query_as::<_, DyapixDs>("SELECT id, `key`, ds_type, ds_json, prev_ds_json, ds_status, operation_type, is_deleted, create_time, update_time FROM dyapix_ds WHERE `key` = ? AND is_deleted = FALSE")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+
+        match record {
+            Some(row) => {
+                let ds = serde_json::from_str::<T>(&row.ds_json)
+                    .map_err(|e| anyhow!("Failed to deserialize ds_json: {}", e))?;
+                Ok(ds)
+            }
+            None => Err(anyhow!("No record found for key `{}`", id)),
+        }
+    }
+
+    /// Soft delete a record
+    pub async fn delete(self: &Arc<Self>, id: &str) -> Result<bool> {
+        let pool = get_mysql_pool().await?;
+
+        let record: Option<(String,)> =
+            sqlx::query_as("SELECT ds_json FROM dyapix_ds WHERE `key` = ? AND is_deleted = FALSE")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+
+        if let Some((ds_json,)) = record {
+            let now = Utc::now();
+            let result = sqlx::query(
+                r#"
+                UPDATE dyapix_ds 
+                SET is_deleted = TRUE, 
+                    prev_ds_json = ?,
+                    operation_type = 'delete',
+                    ds_status = 'pending',
+                    update_time = ?
+                WHERE `key` = ?
+                "#,
+            )
+            .bind(ds_json)
+            .bind(now)
+            .bind(id)
+            .execute(pool)
+            .await?;
+            Ok(result.rows_affected() > 0)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Get all records of a specific type
+    pub async fn get_all<T>(self: &Arc<Self>) -> Result<Vec<T>>
+    where
+        T: for<'de> serde::Deserialize<'de>,
+    {
+        let full_type = type_name::<T>();
+        let short_type = full_type
+            .rsplit("::")
+            .next()
+            .ok_or_else(|| anyhow!("Failed to extract type name from: {}", full_type))?;
+
+        let pool = get_mysql_pool().await?;
+
+        let rows: Vec<DyapixDs> = sqlx::query_as::<_, DyapixDs>(
+            r#"
+            SELECT id, `key`, ds_type, ds_json, prev_ds_json, ds_status, operation_type, is_deleted, create_time, update_time
+            FROM dyapix_ds
+            WHERE ds_type = ? AND is_deleted = FALSE
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(short_type)
+        .fetch_all(pool)
+        .await?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            match serde_json::from_str::<T>(&row.ds_json) {
+                Ok(ds) => result.push(ds),
+                Err(e) => {
+                    warn!(
+                        "Failed to deserialize ds_json for key {} into type {}: {}",
+                        row.key, short_type, e
+                    );
+                }
+            }
+        }
+
+        Ok(result)
+    }
+}
+

@@ -6,6 +6,18 @@ edition = "2021"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+erased-serde = { workspace = true }
+dashmap = { workspace = true }
+once_cell = { workspace = true }
+arc-swap = { workspace = true }
+router-radix = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+config = { workspace = true }
 
 [lib]
 name = "dyapix_common"
