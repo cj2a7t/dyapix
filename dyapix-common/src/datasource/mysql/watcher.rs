@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::sync::Arc;
 
 use super::pool::get_mysql_pool;
 use super::types::DyapixDs;
@@ -7,7 +6,7 @@ use crate::datasource::mysql::MysqlDataSource;
 
 impl MysqlDataSource {
     /// Perform initial full load of all datasource records
-    pub async fn initial_load(self: &Arc<Self>) -> Result<()> {
+    pub(super) async fn initial_load(&self) -> Result<()> {
         let pool = get_mysql_pool().await?;
         const PAGE_SIZE: i64 = 100;
 
@@ -53,7 +52,7 @@ impl MysqlDataSource {
     }
 
     /// Watch and sync pending records in a loop
-    pub async fn watch_pending(self: &Arc<Self>) -> Result<()> {
+    pub(super) async fn watch_pending(&self) -> Result<()> {
         let pool = get_mysql_pool().await?;
         const PAGE_SIZE: i64 = 100;
 

@@ -1,18 +1,18 @@
 mod crud;
+mod extension;
+mod handler;
 mod pool;
-mod route;
 mod types;
-mod upstream;
 mod watcher;
-
-use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::datasource::interface::DataSource;
+use crate::cro::CRO;
 
 // Re-export commonly used items
+pub use handler::{CROHandler, CROHandlerRegistry};
 pub use pool::get_mysql_pool;
 pub use types::DyapixDs;
 
@@ -20,54 +20,91 @@ pub use types::DyapixDs;
 pub struct MysqlDataSource;
 
 impl MysqlDataSource {
-    /// Dispatch database record to appropriate cache based on ds_type
+    /// Dispatch database record to appropriate cache based on entity type
     async fn insert_into_cache(&self, record: &DyapixDs) -> bool {
-        match record.ds_type.as_str() {
-            "Route" => route::insert_route_into_cache(record).await,
-            "Upstream" => upstream::insert_upstream_into_cache(record).await,
-            _ => {
+        // Get the handler for this entity type from the registry
+        let handler = match CROHandlerRegistry::global().get(&record.ds_type) {
+            Some(h) => h,
+            None => {
                 tracing::error!(
-                    "Unknown ds_type: {} for record id = {}",
-                    record.ds_type,
-                    record.id
+                    "No handler registered for entity type: {}",
+                    record.ds_type
                 );
-                false
+                return false;
             }
-        }
+        };
+
+        // Parse the entity from the record
+        let entity = match handler.parse_entity(&record.ds_json) {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::error!(
+                    "Failed to parse entity for record id = {}: {}",
+                    record.id,
+                    e
+                );
+                return false;
+            }
+        };
+
+        // Parse the previous entity if it exists (for updates)
+        let prev_entity = if let Some(ref prev_json) = record.prev_ds_json {
+            match handler.parse_entity(prev_json) {
+                Ok(e) => Some(e),
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to parse previous entity for record id = {}: {}",
+                        record.id,
+                        e
+                    );
+                    return false;
+                }
+            }
+        } else {
+            None
+        };
+
+        // Insert into cache using the handler
+        handler
+            .insert_into_cache(&record.operation_type, entity, prev_entity)
+            .await
     }
 }
 
 #[async_trait]
 impl DataSource for MysqlDataSource {
-    async fn fetch_and_watch(self: Arc<Self>) -> Result<()> {
+    async fn fetch_and_watch(&self) -> Result<()> {
         // Initial full load
         self.initial_load().await?;
-        
+
         // Watch for pending records
         self.watch_pending().await
     }
 
-    async fn put<T>(self: Arc<Self>, id: &str, value: &T) -> Result<T>
+    async fn put<T>(&self, resource: &T) -> Result<T>
     where
-        T: serde::Serialize + Clone + Send + Sync + 'static,
+        T: CRO,
     {
-        self.put(id, value).await
+        self.put(resource).await
     }
 
-    async fn get<T>(self: Arc<Self>, id: &str) -> Result<T>
+    async fn get<T>(&self, id: &str) -> Result<T>
     where
-        T: for<'de> serde::Deserialize<'de>,
+        T: CRO,
     {
         self.get(id).await
     }
 
-    async fn delete(self: Arc<Self>, id: &str) -> Result<bool> {
-        self.delete(id).await
+    async fn delete<T>(&self, id: &str) -> Result<bool>
+    where
+        T: CRO,
+    {
+        self.delete_internal::<T>(id).await
     }
 
-    async fn get_all<T>(self: Arc<Self>) -> Result<Vec<T>>
+    async fn get_all<T>(&self) -> Result<Vec<T>>
     where
-        T: for<'de> serde::Deserialize<'de>,
+        T: CRO,
     {
         self.get_all().await
     }

@@ -1,26 +1,22 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use std::any::type_name;
-use std::sync::Arc;
 use tracing::warn;
 
 use super::pool::get_mysql_pool;
 use super::types::DyapixDs;
+use crate::cro::CRO;
 use crate::datasource::mysql::MysqlDataSource;
 
 impl MysqlDataSource {
     /// Insert or update a record
-    pub async fn put<T>(self: &Arc<Self>, id: &str, value: &T) -> Result<T>
+    pub(super) async fn put<T>(&self, value: &T) -> Result<T>
     where
-        T: serde::Serialize + Clone + Send + Sync + 'static,
+        T: CRO,
     {
         let pool = get_mysql_pool().await?;
         let value_json = serde_json::to_string(value)?;
-
-        let ds_type = std::any::type_name::<T>()
-            .rsplit("::")
-            .next()
-            .unwrap_or("Unknown");
+        let id = value.id();
+        let ds_type = T::cro_kind();
         let now = Utc::now();
 
         // Check if record already exists (including deleted ones)
@@ -71,15 +67,21 @@ impl MysqlDataSource {
     }
 
     /// Get a single record by key
-    pub async fn get<T>(self: &Arc<Self>, id: &str) -> Result<T>
+    pub(super) async fn get<T>(&self, id: &str) -> Result<T>
     where
-        T: for<'de> serde::Deserialize<'de>,
+        T: CRO,
     {
         let pool = get_mysql_pool().await?;
+        let ds_type = T::cro_kind();
 
         let record: Option<DyapixDs> =
-            sqlx::query_as::<_, DyapixDs>("SELECT id, `key`, ds_type, ds_json, prev_ds_json, ds_status, operation_type, is_deleted, create_time, update_time FROM dyapix_ds WHERE `key` = ? AND is_deleted = FALSE")
+            sqlx::query_as::<_, DyapixDs>(
+                "SELECT id, `key`, ds_type, ds_json, prev_ds_json, ds_status, operation_type, is_deleted, create_time, update_time 
+                 FROM dyapix_ds 
+                 WHERE `key` = ? AND ds_type = ? AND is_deleted = FALSE"
+            )
                 .bind(id)
+                .bind(ds_type)
                 .fetch_optional(pool)
                 .await?;
 
@@ -89,19 +91,29 @@ impl MysqlDataSource {
                     .map_err(|e| anyhow!("Failed to deserialize ds_json: {}", e))?;
                 Ok(ds)
             }
-            None => Err(anyhow!("No record found for key `{}`", id)),
+            None => Err(anyhow!(
+                "No record found for key `{}` with type `{}`",
+                id,
+                ds_type
+            )),
         }
     }
 
     /// Soft delete a record
-    pub async fn delete(self: &Arc<Self>, id: &str) -> Result<bool> {
+    pub(super) async fn delete_internal<T>(&self, id: &str) -> Result<bool>
+    where
+        T: CRO,
+    {
         let pool = get_mysql_pool().await?;
+        let ds_type = T::cro_kind();
 
-        let record: Option<(String,)> =
-            sqlx::query_as("SELECT ds_json FROM dyapix_ds WHERE `key` = ? AND is_deleted = FALSE")
-                .bind(id)
-                .fetch_optional(pool)
-                .await?;
+        let record: Option<(String,)> = sqlx::query_as(
+            "SELECT ds_json FROM dyapix_ds WHERE `key` = ? AND ds_type = ? AND is_deleted = FALSE",
+        )
+        .bind(id)
+        .bind(ds_type)
+        .fetch_optional(pool)
+        .await?;
 
         if let Some((ds_json,)) = record {
             let now = Utc::now();
@@ -128,17 +140,12 @@ impl MysqlDataSource {
     }
 
     /// Get all records of a specific type
-    pub async fn get_all<T>(self: &Arc<Self>) -> Result<Vec<T>>
+    pub(super) async fn get_all<T>(&self) -> Result<Vec<T>>
     where
-        T: for<'de> serde::Deserialize<'de>,
+        T: CRO,
     {
-        let full_type = type_name::<T>();
-        let short_type = full_type
-            .rsplit("::")
-            .next()
-            .ok_or_else(|| anyhow!("Failed to extract type name from: {}", full_type))?;
-
         let pool = get_mysql_pool().await?;
+        let ds_type = T::cro_kind();
 
         let rows: Vec<DyapixDs> = sqlx::query_as::<_, DyapixDs>(
             r#"
@@ -148,7 +155,7 @@ impl MysqlDataSource {
             ORDER BY id ASC
             "#,
         )
-        .bind(short_type)
+        .bind(ds_type)
         .fetch_all(pool)
         .await?;
 
@@ -159,7 +166,7 @@ impl MysqlDataSource {
                 Err(e) => {
                     warn!(
                         "Failed to deserialize ds_json for key {} into type {}: {}",
-                        row.key, short_type, e
+                        row.key, ds_type, e
                     );
                 }
             }
@@ -168,4 +175,3 @@ impl MysqlDataSource {
         Ok(result)
     }
 }
-

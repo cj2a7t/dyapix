@@ -1,22 +1,30 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use std::sync::Arc;
+
+use crate::cro::CRO;
 
 #[async_trait]
-pub trait DataSource {
-    async fn fetch_and_watch(self: Arc<Self>) -> Result<()>;
+pub trait DataSource: Send + Sync {
+    /// Fetch all data and start watching for changes
+    async fn fetch_and_watch(&self) -> Result<()>;
 
-    async fn put<T>(self: Arc<Self>, id: &str, value: &T) -> Result<T>
+    /// Put (insert or update) a resource
+    async fn put<T>(&self, resource: &T) -> Result<T>
     where
-        T: serde::Serialize + Clone + Send + Sync + 'static;
+        T: CRO;
 
-    async fn get<T>(self: Arc<Self>, id: &str) -> Result<T>
+    /// Get a resource by id
+    async fn get<T>(&self, id: &str) -> Result<T>
     where
-        T: for<'de> serde::Deserialize<'de>;
+        T: CRO;
 
-    async fn delete(self: Arc<Self>, id: &str) -> Result<bool>;
-
-    async fn get_all<T>(self: Arc<Self>) -> Result<Vec<T>>
+    /// Delete a resource by id
+    async fn delete<T>(&self, id: &str) -> Result<bool>
     where
-        T: for<'de> serde::Deserialize<'de>;
+        T: CRO;
+
+    /// Get all resources of a specific type
+    async fn get_all<T>(&self) -> Result<Vec<T>>
+    where
+        T: CRO;
 }

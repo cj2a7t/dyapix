@@ -1,87 +1,27 @@
-use router_radix::{RadixHttpMethod, RadixNode};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+mod route;
+mod tls_cert;
+mod upstream;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Route {
-    pub id: String,
-    pub name: String,
-    pub desc: Option<String>,
-    pub priority: u32,
-    pub label: Option<HashMap<String, String>>,
-    pub uris: Vec<String>,
-    pub methods: Option<Vec<String>>,
-    pub hosts: Option<Vec<String>>,
-    pub plugins: Option<HashMap<String, serde_json::Value>>,
-    pub upstream_id: Option<String>,
-    pub upstream: Option<Upstream>,
-}
+use serde::{de::DeserializeOwned, Serialize};
 
-impl From<&Route> for RadixNode {
-    fn from(route: &Route) -> Self {
-        let methods = route.methods.as_ref().map(|m| {
-            let mut result = RadixHttpMethod::empty();
-            for method in m {
-                if let Some(http_method) = RadixHttpMethod::from_str(method) {
-                    result |= http_method;
-                }
-            }
-            result
-        });
+// Re-export resource types
+pub use route::Route;
+pub use tls_cert::TlsCert;
+pub use upstream::{LoadBalanceType, Scheme, Timeout, Upstream};
 
-        RadixNode {
-            id: route.id.clone(),
-            paths: route.uris.clone(),
-            methods,
-            hosts: route.hosts.clone(),
-            remote_addrs: None,
-            vars: None,
-            filter_fn: None,
-            priority: route.priority as i32,
-            metadata: serde_json::to_value(route).unwrap_or(serde_json::Value::Null),
-        }
-    }
-}
+// CRO kind constants - use these to avoid magic strings
+pub const CRO_KIND_ROUTE: &str = "Route";
+pub const CRO_KIND_UPSTREAM: &str = "Upstream";
+pub const CRO_KIND_TLS_CERT: &str = "TlsCert";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Upstream {
-    pub id: String,
-    pub name: String,
-    pub desc: Option<String>,
-    pub type_: LoadBalanceType,
-    pub scheme: Scheme,
-    pub nodes: HashMap<String, u32>,
-    pub retries: Option<u32>,
-    pub timeout: Option<Timeout>,
-}
+/// Core Resource Object trait
+/// All resources (Route, Upstream, TlsCert, etc.) must implement this trait
+pub trait CRO: Serialize + DeserializeOwned + Clone + Send + Sync + 'static {
+    /// Get the CRO kind/type name
+    fn cro_kind() -> &'static str
+    where
+        Self: Sized;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LoadBalanceType {
-    RoundRobin,
-    LeastConn,
-    ConsistentHash,
-    WeightedRoundRobin,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Scheme {
-    Http,
-    Https,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Timeout {
-    pub connect: u32,
-    pub send: u32,
-    pub read: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TlsCert {
-    pub id: String,
-    pub cert: String,
-    pub key: String,
-    pub snis: Vec<String>,
+    /// Get the resource ID
+    fn id(&self) -> &str;
 }
