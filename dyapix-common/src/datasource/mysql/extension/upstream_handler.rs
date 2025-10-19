@@ -1,34 +1,33 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use std::any::Any;
 
 use crate::cache::upstreams_cache::{self, UpstreamsCacheEvent};
 use crate::cache::CacheEventType;
 use crate::cro::Upstream;
-use crate::datasource::mysql::handler::CROHandler;
+use crate::datasource::mysql::handler::{CROEntity, CROHandler};
 
 /// Upstream CRO handler
 pub struct UpstreamHandler;
 
 #[async_trait]
 impl CROHandler for UpstreamHandler {
-    fn parse_entity(&self, json: &str) -> Result<Box<dyn Any + Send>> {
+    fn parse_entity(&self, json: &str) -> Result<CROEntity> {
         let upstream: Upstream = serde_json::from_str(json)
             .map_err(|e| anyhow!("Failed to parse Upstream from JSON: {}", e))?;
-        Ok(Box::new(upstream))
+        Ok(CROEntity::Upstream(upstream))
     }
 
     async fn insert_into_cache(
         &self,
         operation_type: &str,
-        entity: Box<dyn Any + Send>,
-        _prev_entity: Option<Box<dyn Any + Send>>,
+        entity: CROEntity,
+        _prev_entity: Option<CROEntity>,
     ) -> bool {
-        // Downcast to Upstream
-        let upstream = match entity.downcast::<Upstream>() {
-            Ok(u) => *u,
-            Err(_) => {
-                tracing::error!("Failed to downcast entity to Upstream");
+        // Extract upstream from entity enum
+        let upstream = match entity {
+            CROEntity::Upstream(u) => u,
+            _ => {
+                tracing::error!("Expected Upstream entity, got different type");
                 return false;
             }
         };
@@ -65,4 +64,3 @@ impl CROHandler for UpstreamHandler {
         }
     }
 }
-

@@ -141,5 +141,5 @@ pub fn get_app_config() -> Result<Arc<AppConfig>> {
             let config = AppConfig::load_from_env()?;
             Ok(Arc::new(config))
         })
-        .map(|arc| arc.clone())
+        .cloned()
 }

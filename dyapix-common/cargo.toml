@@ -22,3 +22,10 @@ config = { workspace = true }
 [lib]
 name = "dyapix_common"
 path = "src/lib.rs"
+
+[[example]]
+name = "datasource_example"
+path = "examples/datasource_example.rs"
+
+[dev-dependencies]
+tracing-subscriber = "0.3"

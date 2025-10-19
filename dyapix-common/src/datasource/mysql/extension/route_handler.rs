@@ -1,39 +1,41 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
-use std::any::Any;
 
 use crate::cache::routes_cache::{self, RoutesCacheEvent};
 use crate::cache::CacheEventType;
 use crate::cro::Route;
-use crate::datasource::mysql::handler::CROHandler;
+use crate::datasource::mysql::handler::{CROEntity, CROHandler};
 
 /// Route CRO handler
 pub struct RouteHandler;
 
 #[async_trait]
 impl CROHandler for RouteHandler {
-    fn parse_entity(&self, json: &str) -> Result<Box<dyn Any + Send>> {
+    fn parse_entity(&self, json: &str) -> Result<CROEntity> {
         let route: Route = serde_json::from_str(json)
             .map_err(|e| anyhow!("Failed to parse Route from JSON: {}", e))?;
-        Ok(Box::new(route))
+        Ok(CROEntity::Route(Box::new(route)))
     }
 
     async fn insert_into_cache(
         &self,
         operation_type: &str,
-        entity: Box<dyn Any + Send>,
-        prev_entity: Option<Box<dyn Any + Send>>,
+        entity: CROEntity,
+        prev_entity: Option<CROEntity>,
     ) -> bool {
-        // Downcast to Route
-        let route = match entity.downcast::<Route>() {
-            Ok(r) => *r,
-            Err(_) => {
-                tracing::error!("Failed to downcast entity to Route");
+        // Extract route from entity enum
+        let route = match entity {
+            CROEntity::Route(r) => *r,
+            _ => {
+                tracing::error!("Expected Route entity, got different type");
                 return false;
             }
         };
 
-        let prev_route = prev_entity.and_then(|e| e.downcast::<Route>().ok().map(|r| *r));
+        let prev_route = prev_entity.and_then(|e| match e {
+            CROEntity::Route(r) => Some(*r),
+            _ => None,
+        });
 
         let event = match operation_type {
             "create" => RoutesCacheEvent {

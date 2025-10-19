@@ -3,14 +3,22 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use crate::cro::{CRO_KIND_ROUTE, CRO_KIND_UPSTREAM};
+use crate::cro::{Route, Upstream, CRO_KIND_ROUTE, CRO_KIND_UPSTREAM};
+
+/// Type-safe entity enum for CRO operations
+/// Route is boxed to reduce enum size variance (Route is 424 bytes, Upstream is 152 bytes)
+#[derive(Debug, Clone)]
+pub enum CROEntity {
+    Route(Box<Route>),
+    Upstream(Upstream),
+}
 
 /// CRO (Core Resource Object) handler trait for processing cache operations
 /// Each resource type (Route, Upstream, TlsCert, etc.) should implement this trait
 #[async_trait]
 pub trait CROHandler: Send + Sync {
-    /// Parse CRO from JSON string
-    fn parse_entity(&self, json: &str) -> Result<Box<dyn std::any::Any + Send>>;
+    /// Parse CRO from JSON string into type-safe entity
+    fn parse_entity(&self, json: &str) -> Result<CROEntity>;
 
     /// Insert CRO into cache
     ///
@@ -21,8 +29,8 @@ pub trait CROHandler: Send + Sync {
     async fn insert_into_cache(
         &self,
         operation_type: &str,
-        entity: Box<dyn std::any::Any + Send>,
-        prev_entity: Option<Box<dyn std::any::Any + Send>>,
+        entity: CROEntity,
+        prev_entity: Option<CROEntity>,
     ) -> bool;
 }
 

@@ -1,6 +1,7 @@
 mod crud;
 mod extension;
 mod handler;
+mod health;
 mod pool;
 mod types;
 mod watcher;
@@ -12,14 +13,26 @@ use crate::datasource::interface::DataSource;
 use crate::cro::CRO;
 
 // Re-export commonly used items
-pub use handler::{CROHandler, CROHandlerRegistry};
+pub use handler::{CROEntity, CROHandler, CROHandlerRegistry};
+pub use health::{DataSourceStats, HealthStatus};
 pub use pool::get_mysql_pool;
 pub use types::DyapixDs;
+pub use watcher::{init_shutdown_channel, trigger_shutdown};
 
 /// MySQL implementation of DataSource trait
 pub struct MysqlDataSource;
 
 impl MysqlDataSource {
+    /// Check health status of the datasource
+    pub async fn health_check() -> HealthStatus {
+        HealthStatus::check().await
+    }
+
+    /// Get datasource statistics
+    pub async fn get_stats() -> Result<DataSourceStats> {
+        HealthStatus::get_statistics().await
+    }
+
     /// Dispatch database record to appropriate cache based on entity type
     async fn insert_into_cache(&self, record: &DyapixDs) -> bool {
         // Get the handler for this entity type from the registry
@@ -85,14 +98,14 @@ impl DataSource for MysqlDataSource {
     where
         T: CRO,
     {
-        self.put(resource).await
+        self.put_internal(resource).await
     }
 
     async fn get<T>(&self, id: &str) -> Result<T>
     where
         T: CRO,
     {
-        self.get(id).await
+        self.get_internal(id).await
     }
 
     async fn delete<T>(&self, id: &str) -> Result<bool>
@@ -106,6 +119,6 @@ impl DataSource for MysqlDataSource {
     where
         T: CRO,
     {
-        self.get_all().await
+        self.get_all_internal().await
     }
 }
