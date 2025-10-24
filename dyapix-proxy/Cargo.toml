@@ -3,6 +3,13 @@ name = "dyapix-proxy"
 version = "0.1.0"
 edition = "2024"
 
+
+[dependencies]
+dyapix-common = { path = "../dyapix-common" }
+pingora = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+
 [lib]
 name = "dyapix_proxy"
 path = "src/lib.rs"
