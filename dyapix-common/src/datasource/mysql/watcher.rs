@@ -1,30 +1,48 @@
 use anyhow::{anyhow, Result};
-use tokio::select;
-use tokio::sync::broadcast;
 
 use super::pool::get_mysql_pool;
 use super::types::DyapixDs;
 use crate::datasource::mysql::MysqlDataSource;
 
-// Global shutdown channel
-static SHUTDOWN_TX: std::sync::OnceLock<broadcast::Sender<()>> = std::sync::OnceLock::new();
-
-/// Initialize shutdown channel
-pub fn init_shutdown_channel() -> broadcast::Sender<()> {
-    let (tx, _) = broadcast::channel(1);
-    SHUTDOWN_TX.set(tx.clone()).ok();
-    tx
-}
-
-/// Send shutdown signal to all watchers
-pub fn trigger_shutdown() {
-    if let Some(tx) = SHUTDOWN_TX.get() {
-        let _ = tx.send(());
-    }
-}
-
 impl MysqlDataSource {
     /// Perform initial full load of all datasource records
+    ///
+    /// Loads all records from the `dyapix_ds` table using cursor-based pagination
+    /// for optimal performance. This method is designed to handle large datasets
+    /// efficiently by processing records in batches.
+    ///
+    /// # Process Flow
+    ///
+    /// 1. **Pagination**: Uses cursor-based pagination with `id > last_id` to avoid
+    ///    performance issues with large OFFSET values
+    /// 2. **Batch Processing**: Processes records in batches of 100 for memory efficiency
+    /// 3. **Cache Insertion**: Each record is parsed and inserted into the appropriate cache
+    /// 4. **Progress Logging**: Logs progress for monitoring and debugging
+    ///
+    /// # Performance Characteristics
+    ///
+    /// - **Memory Efficient**: Processes records in small batches
+    /// - **Database Friendly**: Uses indexed queries with cursor pagination
+    /// - **Resumable**: Can be safely restarted if interrupted
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if all records are successfully loaded, or an error if
+    /// there are database connection issues or data processing failures.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use dyapix_common::datasource::mysql::MysqlDataSource;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> anyhow::Result<()> {
+    ///     let ds = MysqlDataSource;
+    ///     ds.initial_load().await?;
+    ///     println!("Initial load completed");
+    ///     Ok(())
+    /// }
+    /// ```
     pub(super) async fn initial_load(&self) -> Result<()> {
         let pool = get_mysql_pool().await?;
         const PAGE_SIZE: i64 = 100;
@@ -84,66 +102,71 @@ impl MysqlDataSource {
         Ok(())
     }
 
-    /// Watch and sync pending records in a loop
-    /// Supports graceful shutdown via shutdown_rx channel
-    pub(super) async fn watch_pending(&self) -> Result<()> {
+    /// Process pending records once
+    ///
+    /// This method processes all records with status 'pending' from the `dyapix_ds` table.
+    /// It's designed to be called periodically by a BackgroundService to keep the cache
+    /// synchronized with the latest changes.
+    ///
+    /// # Process Flow
+    ///
+    /// 1. **Fetch Pending**: Retrieves all records with `ds_status = 'pending'`
+    /// 2. **Mark Syncing**: Updates status to 'syncing' to prevent duplicate processing
+    /// 3. **Process Records**: Parses and inserts each record into the appropriate cache
+    /// 4. **Update Status**: Sets status to 'synced' on success or back to 'pending' on failure
+    ///
+    /// # Error Handling
+    ///
+    /// - **Database Failures**: Retries with exponential backoff (max 3 retries)
+    /// - **Individual Failures**: Failed records are reset to 'pending' for retry
+    /// - **Batch Processing**: Individual record failures don't stop the batch
+    ///
+    /// # Performance
+    ///
+    /// - Processes up to 100 records per call
+    /// - Uses batch status updates for efficiency
+    /// - Returns early if no pending records found
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the processing completes successfully, or an error if
+    /// there are critical database connection issues.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use dyapix_common::datasource::mysql::MysqlDataSource;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> anyhow::Result<()> {
+    ///     let ds = MysqlDataSource;
+    ///     ds.process_pending_records().await?;
+    ///     println!("Pending records processed");
+    ///     Ok(())
+    /// }
+    /// ```
+    pub(super) async fn process_pending_records(&self) -> Result<()> {
         const PAGE_SIZE: i64 = 100;
-        const POLL_INTERVAL_SECS: u64 = 5;
         const MAX_RETRIES: u32 = 3;
-        const RETRY_DELAY_SECS: u64 = 10;
 
-        tracing::info!("Entering watch loop for pending datasource records...");
+        tracing::info!("Processing pending datasource records...");
 
-        // Subscribe to shutdown signal
-        let mut shutdown_rx = SHUTDOWN_TX
-            .get_or_init(|| {
-                let (tx, _) = broadcast::channel(1);
-                tx
-            })
-            .subscribe();
-
-        loop {
-            // Check for shutdown signal
-            select! {
-                _ = shutdown_rx.recv() => {
-                    tracing::info!("Received shutdown signal, stopping watcher...");
-                    return Ok(());
-                }
-                _ = Self::process_pending_records(self, PAGE_SIZE, MAX_RETRIES, RETRY_DELAY_SECS, POLL_INTERVAL_SECS) => {}
-            }
-        }
-    }
-
-    /// Process pending records in one iteration
-    async fn process_pending_records(
-        &self,
-        page_size: i64,
-        max_retries: u32,
-        retry_delay_secs: u64,
-        poll_interval_secs: u64,
-    ) {
         // Fetch pending records with retry logic
-        let pending_rows = match Self::fetch_pending_with_retry(page_size, max_retries).await {
+        let pending_rows = match Self::fetch_pending_with_retry(PAGE_SIZE, MAX_RETRIES).await {
             Ok(rows) => rows,
             Err(e) => {
                 tracing::error!(
                     "Failed to fetch pending records after {} retries: {}",
-                    max_retries,
+                    MAX_RETRIES,
                     e
                 );
-                tracing::info!("Waiting {} seconds before retry...", retry_delay_secs * 2);
-                tokio::time::sleep(std::time::Duration::from_secs(retry_delay_secs * 2)).await;
-                return;
+                return Err(e);
             }
         };
 
         if pending_rows.is_empty() {
-            tracing::debug!(
-                "No pending records found, sleeping {}s...",
-                poll_interval_secs
-            );
-            tokio::time::sleep(std::time::Duration::from_secs(poll_interval_secs)).await;
-            return;
+            tracing::debug!("No pending records found");
+            return Ok(());
         }
 
         tracing::info!("Found {} pending records", pending_rows.len());
@@ -152,8 +175,7 @@ impl MysqlDataSource {
         let ids: Vec<i64> = pending_rows.iter().map(|r| r.id).collect();
         if let Err(e) = Self::batch_update_status(&ids, "syncing").await {
             tracing::error!("Failed to mark records as syncing: {}", e);
-            tokio::time::sleep(std::time::Duration::from_secs(retry_delay_secs)).await;
-            return;
+            return Err(e);
         }
 
         // Process each record
@@ -192,9 +214,43 @@ impl MysqlDataSource {
                 );
             }
         }
+
+        Ok(())
     }
 
     /// Fetch pending records with exponential backoff retry
+    ///
+    /// Retrieves records with status 'pending' from the `dyapix_ds` table with
+    /// automatic retry logic for handling transient database connection issues.
+    ///
+    /// # Retry Strategy
+    ///
+    /// - **Exponential Backoff**: Delay increases exponentially (1s, 2s, 4s, ...)
+    /// - **Maximum Delay**: Capped at 30 seconds to avoid excessive waits
+    /// - **Retry Limit**: Configurable maximum number of retry attempts
+    ///
+    /// # Parameters
+    ///
+    /// - `page_size`: Maximum number of records to fetch per query
+    /// - `max_retries`: Maximum number of retry attempts before giving up
+    ///
+    /// # Returns
+    ///
+    /// Returns a vector of `DyapixDs` records on success, or an error if all
+    /// retry attempts are exhausted.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use dyapix_common::datasource::mysql::MysqlDataSource;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> anyhow::Result<()> {
+    ///     let records = MysqlDataSource::fetch_pending_with_retry(100, 3).await?;
+    ///     println!("Fetched {} pending records", records.len());
+    ///     Ok(())
+    /// }
+    /// ```
     async fn fetch_pending_with_retry(page_size: i64, max_retries: u32) -> Result<Vec<DyapixDs>> {
         let mut retry_count = 0;
         let mut delay_secs = 1u64;
@@ -236,6 +292,25 @@ impl MysqlDataSource {
     }
 
     /// Batch update status for multiple records
+    ///
+    /// Efficiently updates the `ds_status` field for multiple records in a single
+    /// database transaction. This is more efficient than updating records individually.
+    ///
+    /// # Parameters
+    ///
+    /// - `ids`: Slice of record IDs to update
+    /// - `status`: New status value to set (e.g., "syncing", "synced", "pending")
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the batch update succeeds, or an error if there are
+    /// database connection issues or SQL execution problems.
+    ///
+    /// # Performance
+    ///
+    /// - Uses a single SQL UPDATE statement with IN clause
+    /// - More efficient than individual updates for large batches
+    /// - Handles empty ID lists gracefully
     async fn batch_update_status(ids: &[i64], status: &str) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
@@ -260,6 +335,25 @@ impl MysqlDataSource {
     }
 
     /// Update status for a single record
+    ///
+    /// Updates the `ds_status` field for a single record. This is typically used
+    /// after processing individual records to mark them as 'synced' or reset them
+    /// to 'pending' on failure.
+    ///
+    /// # Parameters
+    ///
+    /// - `id`: The ID of the record to update
+    /// - `status`: New status value to set
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the update succeeds, or an error if there are
+    /// database connection issues or the record doesn't exist.
+    ///
+    /// # Usage
+    ///
+    /// This method is typically called after processing each record in a batch
+    /// to update its status based on the processing result.
     async fn update_single_status(id: i64, status: &str) -> Result<()> {
         let pool = get_mysql_pool().await?;
         sqlx::query("UPDATE dyapix_ds SET ds_status = ? WHERE id = ?")

@@ -29,9 +29,9 @@ impl DynamicDataSource {
     /// ```
     pub async fn from_config() -> Result<Self> {
         let config = get_app_config()?;
-        
+
         let datasource_type = &config.app.data_source;
-        
+
         match datasource_type.to_lowercase().as_str() {
             "mysql" => {
                 // Validate MySQL config exists
@@ -40,7 +40,7 @@ impl DynamicDataSource {
                         "MySQL datasource selected but no MySQL configuration found"
                     ));
                 }
-                
+
                 tracing::info!("Initializing MySQL datasource from config");
                 Ok(DynamicDataSource::Mysql(MysqlDataSource))
             }
@@ -56,7 +56,7 @@ impl DynamicDataSource {
             )),
         }
     }
-    
+
     /// Get the datasource type as string
     pub fn datasource_type(&self) -> &'static str {
         match self {
@@ -68,10 +68,37 @@ impl DynamicDataSource {
 
 #[async_trait]
 impl DataSource for DynamicDataSource {
-    async fn fetch_and_watch(&self) -> Result<()> {
+    /// Perform initial full load of all data from the configured datasource
+    ///
+    /// Delegates to the appropriate datasource implementation based on the
+    /// configuration. Currently supports MySQL datasource with future support
+    /// for Etcd and Redis.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the full load completes successfully, or an error
+    /// if there are issues with the underlying datasource.
+    async fn full_load(&self) -> Result<()> {
         match self {
-            DynamicDataSource::Mysql(ds) => ds.fetch_and_watch().await,
-            // DynamicDataSource::Etcd(ds) => ds.fetch_and_watch().await,
+            DynamicDataSource::Mysql(ds) => ds.full_load().await,
+            // DynamicDataSource::Etcd(ds) => ds.full_load().await,
+        }
+    }
+
+    /// Load incremental changes from the configured datasource
+    ///
+    /// Delegates to the appropriate datasource implementation to process
+    /// pending records. The specific behavior depends on the underlying
+    /// datasource type.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the incremental load completes successfully, or an error
+    /// if there are issues with the underlying datasource.
+    async fn incremental_load(&self) -> Result<()> {
+        match self {
+            DynamicDataSource::Mysql(ds) => ds.incremental_load().await,
+            // DynamicDataSource::Etcd(ds) => ds.incremental_load().await,
         }
     }
 
@@ -155,4 +182,3 @@ mod tests {
         assert_eq!(mysql_ds.datasource_type(), "mysql");
     }
 }
-

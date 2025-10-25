@@ -9,6 +9,8 @@ dyapix-common = { path = "../dyapix-common" }
 pingora = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
 
 [lib]
 name = "dyapix_proxy"
