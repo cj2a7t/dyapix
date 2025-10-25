@@ -4,16 +4,16 @@ use dyapix_common::{
     cro::{Route, Upstream},
 };
 use pingora::{
+    Result,
     http::StatusCode,
     prelude::*,
     proxy::{ProxyHttp, Session},
-    Result,
 };
 
 use crate::error::{
     AnyhowResultExt, ERROR_CACHE_NOT_INITIALIZED, ERROR_ROUTE_NOT_FOUND, ERROR_UPSTREAM_NOT_FOUND,
 };
-use crate::load_balancer::{build_load_balancer, DynamicLoadBalancer, get_sni_from_backend};
+use crate::load_balancer::{DynamicLoadBalancer, build_load_balancer, get_sni_from_backend};
 
 pub struct DyapixProxy;
 
