@@ -5,19 +5,22 @@ use dyapix_common::{
 };
 use pingora::{
     http::StatusCode,
-    prelude::{HttpPeer, *},
+    prelude::*,
     proxy::{ProxyHttp, Session},
+    Result,
 };
 
 use crate::error::{
     AnyhowResultExt, ERROR_CACHE_NOT_INITIALIZED, ERROR_ROUTE_NOT_FOUND, ERROR_UPSTREAM_NOT_FOUND,
 };
+use crate::load_balancer::{build_load_balancer, DynamicLoadBalancer, get_sni_from_backend};
 
 pub struct DyapixProxy;
 
 pub struct DyapixProxyContext {
     pub matched_route: Option<Route>,
     pub matched_upstream: Option<Upstream>,
+    pub load_balancer: Option<DynamicLoadBalancer>,
 }
 
 #[async_trait]
@@ -28,16 +31,15 @@ impl ProxyHttp for DyapixProxy {
         DyapixProxyContext {
             matched_route: None,
             matched_upstream: None,
+            load_balancer: None,
         }
     }
 
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
-        // Get the routes and upstreams cache
         let routes_cache = routes_cache::local().to_pingora_result(ERROR_CACHE_NOT_INITIALIZED)?;
         let upstreams_cache =
             upstreams_cache::local().to_pingora_result(ERROR_CACHE_NOT_INITIALIZED)?;
 
-        // Use the radix router to match the route
         let match_result = routes_cache
             .routes_radix
             .match_route(
@@ -51,7 +53,6 @@ impl ProxyHttp for DyapixProxy {
             )?;
         let matched_route_id = match_result.id;
 
-        // Get the matched route from the cache
         let matched_route = routes_cache
             .routes_map
             .get(&matched_route_id)
@@ -62,11 +63,13 @@ impl ProxyHttp for DyapixProxy {
                 None,
             ))?;
 
+        // Build load balancer from inline upstream or referenced upstream
         if let Some(upstream) = matched_route.upstream.clone() {
-            ctx.matched_upstream = Some(upstream);
-        }
-        // Use upstream id to get the upstream from the cache
-        if let Some(ref upstream_id) = matched_route.upstream_id {
+            ctx.matched_upstream = Some(upstream.clone());
+            if let Ok(lb) = build_load_balancer(&upstream) {
+                ctx.load_balancer = Some(lb);
+            }
+        } else if let Some(ref upstream_id) = matched_route.upstream_id {
             let upstream = upstreams_cache
                 .upstreams_map
                 .get(upstream_id)
@@ -77,12 +80,13 @@ impl ProxyHttp for DyapixProxy {
                     None,
                 ))?
                 .clone();
-            ctx.matched_upstream = Some(upstream);
+            ctx.matched_upstream = Some(upstream.clone());
+            if let Ok(lb) = build_load_balancer(&upstream) {
+                ctx.load_balancer = Some(lb);
+            }
         }
 
-        // Set the matched route to the context
         ctx.matched_route = Some(matched_route.clone());
-
         Ok(false)
     }
 
@@ -91,7 +95,32 @@ impl ProxyHttp for DyapixProxy {
         _session: &mut Session,
         ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
-        let mut peer = HttpPeer::new("127.0.0.1", false, "1.1.1.1".to_string());
+        let (lb, upstream) = match (&ctx.load_balancer, &ctx.matched_upstream) {
+            (Some(lb), Some(upstream)) => (lb, upstream),
+            _ => {
+                return Err(Error::create(
+                    ErrorType::HTTPStatus(StatusCode::BAD_GATEWAY.into()),
+                    ErrorSource::Upstream,
+                    Some(ImmutStr::from("No upstream configured")),
+                    None,
+                ));
+            }
+        };
+
+        // Select backend using configured load balancing strategy
+        let Some(backend) = lb.select(b"", 32) else {
+            return Err(Error::create(
+                ErrorType::HTTPStatus(StatusCode::BAD_GATEWAY.into()),
+                ErrorSource::Upstream,
+                Some(ImmutStr::from("No healthy backend available")),
+                None,
+            ));
+        };
+
+        let tls = matches!(upstream.scheme, dyapix_common::cro::Scheme::Https);
+        let host = get_sni_from_backend(&backend);
+        let peer = HttpPeer::new(backend.clone(), tls, host);
+
         Ok(Box::new(peer))
     }
 }

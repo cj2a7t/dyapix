@@ -7,7 +7,7 @@ use serde::{de::DeserializeOwned, Serialize};
 // Re-export resource types
 pub use route::Route;
 pub use tls_cert::TlsCert;
-pub use upstream::{LoadBalanceType, Scheme, Timeout, Upstream};
+pub use upstream::{LoadBalanceType, Scheme, Timeout, Upstream, UpstreamNode};
 
 // CRO kind constants - use these to avoid magic strings
 pub const CRO_KIND_ROUTE: &str = "Route";
