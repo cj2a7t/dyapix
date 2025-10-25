@@ -9,15 +9,14 @@ mod watcher;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::datasource::interface::DataSource;
 use crate::cro::CRO;
+use crate::datasource::interface::DataSource;
 
 // Re-export commonly used items
 pub use handler::{CROEntity, CROHandler, CROHandlerRegistry};
 pub use health::{DataSourceStats, HealthStatus};
 pub use pool::get_mysql_pool;
 pub use types::DyapixDs;
-pub use watcher::{init_shutdown_channel, trigger_shutdown};
 
 /// MySQL implementation of DataSource trait
 pub struct MysqlDataSource;
@@ -39,10 +38,7 @@ impl MysqlDataSource {
         let handler = match CROHandlerRegistry::global().get(&record.ds_type) {
             Some(h) => h,
             None => {
-                tracing::error!(
-                    "No handler registered for entity type: {}",
-                    record.ds_type
-                );
+                tracing::error!("No handler registered for entity type: {}", record.ds_type);
                 return false;
             }
         };
@@ -86,12 +82,53 @@ impl MysqlDataSource {
 
 #[async_trait]
 impl DataSource for MysqlDataSource {
-    async fn fetch_and_watch(&self) -> Result<()> {
-        // Initial full load
-        self.initial_load().await?;
+    /// Perform initial full load of all MySQL datasource records
+    ///
+    /// This implementation loads all records from the `dyapix_ds` table using
+    /// cursor-based pagination for better performance with large datasets.
+    /// Records are processed in batches and inserted into the appropriate cache
+    /// based on their entity type.
+    ///
+    /// # Process
+    ///
+    /// 1. Fetches records in batches of 100 using cursor-based pagination
+    /// 2. For each record, determines the appropriate handler based on `ds_type`
+    /// 3. Parses the JSON data into the appropriate entity type
+    /// 4. Inserts the entity into the corresponding cache
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if all records are successfully loaded, or an error if
+    /// there are database connection issues or data parsing failures.
+    async fn full_load(&self) -> Result<()> {
+        self.initial_load().await
+    }
 
-        // Watch for pending records
-        self.watch_pending().await
+    /// Load incremental changes from MySQL datasource
+    ///
+    /// This implementation processes only records with status 'pending' from the
+    /// `dyapix_ds` table. It handles the complete lifecycle of processing pending
+    /// records including status updates and error handling.
+    ///
+    /// # Process
+    ///
+    /// 1. Fetches all records with `ds_status = 'pending'`
+    /// 2. Marks them as 'syncing' to prevent duplicate processing
+    /// 3. Processes each record and updates the cache
+    /// 4. Updates record status to 'synced' on success or back to 'pending' on failure
+    ///
+    /// # Error Handling
+    ///
+    /// - Database connection failures are retried with exponential backoff
+    /// - Individual record processing failures don't stop the batch
+    /// - Failed records are reset to 'pending' status for retry
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the incremental load completes successfully, or an error
+    /// if there are critical database connection issues.
+    async fn incremental_load(&self) -> Result<()> {
+        self.process_pending_records().await
     }
 
     async fn put<T>(&self, resource: &T) -> Result<T>
