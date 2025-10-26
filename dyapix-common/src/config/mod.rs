@@ -9,6 +9,7 @@ static CONFIG: OnceCell<Arc<AppConfig>> = OnceCell::new();
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub app: AppSection,
+    pub server: ServerSection,
     pub log: LogSection,
     pub data_source: DataSourceSection,
 }
@@ -16,6 +17,14 @@ pub struct AppConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSection {
     pub data_source: String, // e.g., "mysql" or "etcd"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerSection {
+    #[serde(default = "default_proxy_host")]
+    pub proxy_host: String,
+    #[serde(default = "default_proxy_port")]
+    pub proxy_port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +79,14 @@ fn default_max_lifetime_secs() -> u64 {
 
 fn default_test_before_acquire() -> bool {
     true
+}
+
+fn default_proxy_host() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_proxy_port() -> u16 {
+    8080
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

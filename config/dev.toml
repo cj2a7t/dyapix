@@ -1,6 +1,9 @@
 # Development environment configuration
 # This configuration will override the corresponding settings in default.toml
 
+[server]
+proxy_port = 8080
+
 [log]
 log_level = "debug"
 
