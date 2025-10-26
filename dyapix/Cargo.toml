@@ -9,3 +9,6 @@ dyapix-proxy = { path = "../dyapix-proxy" }
 pingora = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+config = { workspace = true }
