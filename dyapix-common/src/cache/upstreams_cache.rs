@@ -4,8 +4,8 @@ use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use once_cell::sync::OnceCell;
 
-use crate::cro::Upstream;
 use crate::cache::CacheEventType;
+use crate::cro::Upstream;
 use anyhow::{anyhow, Result};
 
 static UPSTREAMS_CACHE: OnceCell<ArcSwap<UpstreamsCache>> = OnceCell::new();
@@ -20,12 +20,16 @@ pub struct UpstreamsCacheEvent {
 }
 
 pub fn local() -> Result<Arc<UpstreamsCache>> {
-    let cache = UPSTREAMS_CACHE
-        .get()
-        .ok_or_else(|| anyhow!("Cache not initialized"))?
-        .load_full()
-        .clone();
-    Ok(cache)
+    // If cache is not initialized, try to initialize it automatically
+    if UPSTREAMS_CACHE.get().is_none() {
+        init_cache()?;
+    }
+
+    // At this point, cache must be initialized
+    match UPSTREAMS_CACHE.get() {
+        Some(cache_swap) => Ok(cache_swap.load_full().clone()),
+        None => Err(anyhow!("Cache initialization failed")),
+    }
 }
 
 pub fn init_cache() -> Result<()> {

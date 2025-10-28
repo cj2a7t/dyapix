@@ -794,6 +794,7 @@ dependencies = [
  "async-trait",
  "dyapix-common",
  "pingora",
+ "router-radix",
  "tokio",
  "tracing",
 ]
