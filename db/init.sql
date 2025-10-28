@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS dyapix_ds (
     id BIGINT PRIMARY KEY AUTO_INCREMENT, 
     `key` VARCHAR(255) NOT NULL UNIQUE,
-    ds_type VARCHAR(64) NOT NULL COMMENT 'Data source type: route, upstream, tls',
+    ds_type VARCHAR(64) NOT NULL COMMENT 'Data source type: Route, Upstream, TlsCert, etc.',
     ds_json TEXT NOT NULL,
     prev_ds_json TEXT NULL COMMENT 'Previous ds_json before update',
     ds_status ENUM('pending', 'syncing', 'synced') NOT NULL DEFAULT 'pending',

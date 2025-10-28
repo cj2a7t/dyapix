@@ -9,9 +9,11 @@ use pingora::{
     prelude::*,
     proxy::{ProxyHttp, Session},
 };
+use router_radix::RadixMatchOpts;
 
 use crate::error::{
-    AnyhowResultExt, ERROR_CACHE_NOT_INITIALIZED, ERROR_ROUTE_NOT_FOUND, ERROR_UPSTREAM_NOT_FOUND,
+    AnyhowResultExt, ERROR_CACHE_NOT_INITIALIZED, ERROR_HOST_NOT_FOUND, ERROR_ROUTE_NOT_FOUND,
+    ERROR_UPSTREAM_NOT_FOUND,
 };
 use crate::load_balancer::{DynamicLoadBalancer, build_load_balancer, get_sni_from_backend};
 
@@ -40,12 +42,23 @@ impl ProxyHttp for DyapixProxy {
         let upstreams_cache =
             upstreams_cache::local().to_pingora_result(ERROR_CACHE_NOT_INITIALIZED)?;
 
+        let uri = session.req_header().uri.to_string();
+        let method = session.req_header().method.to_string();
+        let host = session
+            .req_header()
+            .headers
+            .get("Host")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
+
+        let match_opts = RadixMatchOpts {
+            method: Some(method),
+            host: host,
+            ..Default::default()
+        };
         let match_result = routes_cache
             .routes_radix
-            .match_route(
-                session.req_header().uri.to_string().as_str(),
-                &Default::default(),
-            )
+            .match_route(uri.as_str(), &match_opts)
             .to_pingora_result(ERROR_ROUTE_NOT_FOUND)?
             .or_err(
                 ErrorType::HTTPStatus(StatusCode::NOT_FOUND.into()),

@@ -11,6 +11,7 @@ async-trait = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+router-radix = {workspace = true}
 
 [lib]
 name = "dyapix_proxy"

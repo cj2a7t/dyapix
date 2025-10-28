@@ -1,4 +1,5 @@
 pub const ERROR_ROUTE_NOT_FOUND: &str = "Route Not Found";
+pub const ERROR_HOST_NOT_FOUND: &str = "Host Not Found";
 pub const ERROR_UPSTREAM_NOT_FOUND: &str = "Upstream Not Found";
 pub const ERROR_CACHE_NOT_INITIALIZED: &str = "Cache Not Initialized";
 

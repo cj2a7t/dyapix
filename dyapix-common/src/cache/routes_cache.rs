@@ -4,8 +4,8 @@ use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use once_cell::sync::OnceCell;
 
-use crate::cro::Route;
 use crate::cache::CacheEventType;
+use crate::cro::Route;
 use anyhow::{anyhow, Result};
 use router_radix::RadixRouter;
 
@@ -24,12 +24,16 @@ pub struct RoutesCacheEvent {
 }
 
 pub fn local() -> Result<Arc<RoutesCache>> {
-    let cache = ROUTES_CACHE
-        .get()
-        .ok_or_else(|| anyhow!("Cache not initialized"))?
-        .load_full()
-        .clone();
-    Ok(cache)
+    // If cache is not initialized, try to initialize it automatically
+    if ROUTES_CACHE.get().is_none() {
+        init_cache()?;
+    }
+
+    // At this point, cache must be initialized
+    match ROUTES_CACHE.get() {
+        Some(cache_swap) => Ok(cache_swap.load_full().clone()),
+        None => Err(anyhow!("Cache initialization failed")),
+    }
 }
 
 pub fn init_cache() -> Result<()> {
